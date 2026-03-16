@@ -5,3 +5,4 @@ __pycache__/
 downloads/
 captcha.json
 settings.py
+venv/
