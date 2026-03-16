@@ -10,7 +10,7 @@ import pandas as pd
 from playwright.async_api import async_playwright
 
 from captcha_solve import solve_captcha_cached
-from settings import PROFILES, SPREADSHEET_ID, SERVICE_ACCOUNT_FILE, REPORT_SHEET_NAME
+from settings import PROFILES, SPREADSHEET_ID, SERVICE_ACCOUNT_FILE, REPORT_SHEET_NAME, SHEET_CLEAR_MAX_ROWS
 
 DEBUG = True
 
@@ -195,9 +195,19 @@ def add_computed_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _col_letter(n: int) -> str:
+    """Преобразует номер столбца в букву: 1->A, 26->Z, 27->AA."""
+    result = ""
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        result = chr(65 + rem) + result
+    return result
+
+
 def upload_to_google_sheet(df: pd.DataFrame) -> None:
     """
-    Очищает лист Google Таблицы и заливает датафрейм (заголовки + данные).
+    Очищает только столбцы с данными (слева) и заливает датафрейм.
+    Столбцы справа (формулы) не трогаются.
     """
     if not SPREADSHEET_ID:
         logging.warning("SPREADSHEET_ID не задан, пропуск загрузки в Google Sheets")
@@ -215,19 +225,26 @@ def upload_to_google_sheet(df: pd.DataFrame) -> None:
         sh = gc.open_by_key(SPREADSHEET_ID)
         worksheet = sh.worksheet(REPORT_SHEET_NAME)
 
-        # Очищаем лист
-        worksheet.clear()
-        logging.info(f"Лист «{REPORT_SHEET_NAME}» очищен")
-
-        # Подготавливаем данные: заголовки + строки
         df = df.fillna("")
         headers = df.columns.tolist()
         rows = [[str(v) if pd.notna(v) else "" for v in row] for row in df.values.tolist()]
         values = [headers] + rows
 
-        if values:
-            worksheet.update(values, "A1", value_input_option="USER_ENTERED")
-            logging.info(f"Залито в Google Sheets: {len(df)} строк")
+        if not values:
+            return
+
+        num_cols = len(headers)
+        num_rows = len(values)
+        last_col = _col_letter(num_cols)
+        data_range = f"A1:{last_col}{num_rows}"
+        clear_rows = max(num_rows, SHEET_CLEAR_MAX_ROWS)
+        clear_range = f"A1:{last_col}{clear_rows}"
+
+        worksheet.batch_clear([clear_range])
+        logging.info(f"Очищен диапазон {clear_range} (формулы справа сохранены)")
+
+        worksheet.update(values, "A1", value_input_option="USER_ENTERED")
+        logging.info(f"Залито в Google Sheets: {len(df)} строк")
     except ImportError as e:
         logging.error(f"Установите gspread и google-auth: pip install gspread google-auth. {e}")
     except Exception as e:
