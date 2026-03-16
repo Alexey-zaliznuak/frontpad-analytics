@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -334,7 +335,8 @@ async def main():
     all_dfs: list[pd.DataFrame] = []
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        headless = os.getenv("HEADLESS", "false").lower() == "true"
+        browser = await p.chromium.launch(headless=headless)
         page = await browser.new_page()
 
         try:
