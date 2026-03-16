@@ -2,6 +2,7 @@
 # Установка зависимостей для запуска на Ubuntu-сервере
 
 set -e
+cd "$(dirname "$0")"
 
 echo "=== Обновление пакетов ==="
 sudo apt update
@@ -11,12 +12,6 @@ sudo apt install -y python3 python3-venv python3-pip
 
 echo "=== Tesseract OCR (для капчи) ==="
 sudo apt install -y tesseract-ocr tesseract-ocr-rus
-
-echo "=== Системные зависимости для Playwright/Chromium ==="
-sudo apt install -y \
-    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-    libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
-    libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2
 
 echo "=== Создание venv (если нет) ==="
 if [ ! -d "venv" ]; then
@@ -30,7 +25,8 @@ pip install pandas lxml playwright pytesseract requests pillow gspread google-au
 
 echo "=== Установка браузера Chromium для Playwright ==="
 playwright install chromium
-playwright install-deps chromium
+echo "=== Установка системных зависимостей для Chromium (требует sudo) ==="
+sudo ./venv/bin/playwright install-deps chromium
 
 echo ""
 echo "=== Готово! ==="
