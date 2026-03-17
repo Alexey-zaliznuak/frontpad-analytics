@@ -226,8 +226,26 @@ def upload_to_google_sheet(df: pd.DataFrame) -> None:
         worksheet = sh.worksheet(REPORT_SHEET_NAME)
 
         df = df.fillna("")
+
+        def to_sheet_value(v):
+            if pd.isna(v) or v == "":
+                return ""
+            if isinstance(v, (int, float)):
+                return v
+            s = str(v).strip()
+            if not s:
+                return ""
+            # Европейский формат 111379,3 — передаём как число, иначе запятая теряется
+            s_clean = s.replace(" ", "")
+            if re.match(r"^-?[\d]+,\d+$", s_clean):
+                try:
+                    return float(s_clean.replace(",", "."))
+                except ValueError:
+                    pass
+            return s
+
         headers = df.columns.tolist()
-        rows = [[str(v) if pd.notna(v) else "" for v in row] for row in df.values.tolist()]
+        rows = [[to_sheet_value(v) for v in row] for row in df.values.tolist()]
         values = [headers] + rows
 
         if not values:
