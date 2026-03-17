@@ -101,9 +101,8 @@ def load_clients_dataframe(downloads_dir: Path) -> pd.DataFrame:
     dfs = []
     for f in files:
         try:
-            # .xls от Frontpad — это HTML-таблица (требуется lxml: pip install lxml)
-            df = pd.read_html(str(f), encoding="utf-8")[0]
-            # Если столбцы числовые (0,1,2...) — первая строка была распознана как данные, используем её как заголовки
+            # thousands=None — не удалять запятую; decimal=',' — европейский формат (111379,3)
+            df = pd.read_html(str(f), encoding="utf-8", thousands=None, decimal=",")[0]
             if len(df.columns) > 0 and df.columns[0] == 0:
                 df.columns = df.iloc[0].astype(str)
                 df = df.iloc[1:].reset_index(drop=True)
@@ -230,16 +229,35 @@ def upload_to_google_sheet(df: pd.DataFrame) -> None:
         def to_sheet_value(v):
             if pd.isna(v) or v == "":
                 return ""
-            if isinstance(v, (int, float)):
-                return v
+            # Числа — передаём как int/float, не строки (иначе в Sheets показывается '1234)
+            try:
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    return float(v) if isinstance(v, float) else int(v)
+                import numpy as np
+                if isinstance(v, (np.integer, np.floating)):
+                    return float(v) if isinstance(v, np.floating) else int(v)
+            except (ValueError, TypeError, ImportError):
+                pass
             s = str(v).strip()
             if not s:
                 return ""
-            # Европейский формат 111379,3 — передаём как число, иначе запятая теряется
-            s_clean = s.replace(" ", "")
+            s_clean = s.replace(" ", "").replace("\xa0", "")
+            # Европейский формат 111379,3 — в float
             if re.match(r"^-?[\d]+,\d+$", s_clean):
                 try:
                     return float(s_clean.replace(",", "."))
+                except ValueError:
+                    pass
+            # Целые числа "1234" — в int (чтобы не было '1234 как текст)
+            if re.match(r"^-?\d+$", s_clean):
+                try:
+                    return int(s_clean)
+                except ValueError:
+                    pass
+            # Числа с точкой "1234.5" — в float
+            if re.match(r"^-?\d+\.\d+$", s_clean):
+                try:
+                    return float(s_clean)
                 except ValueError:
                     pass
             return s
@@ -248,20 +266,25 @@ def upload_to_google_sheet(df: pd.DataFrame) -> None:
         rows = [[to_sheet_value(v) for v in row] for row in df.values.tolist()]
         values = [headers] + rows
 
+        # Логируем первые 70 значений в каждом столбце
+        for col_idx, col_name in enumerate(headers):
+            col_values = [row[col_idx] if col_idx < len(row) else "" for row in rows[:70]]
+            logging.info(f"Столбец «{col_name}» (первые 70): {col_values}")
+
         if not values:
             return
 
         num_cols = len(headers)
         num_rows = len(values)
         last_col = _col_letter(num_cols)
-        data_range = f"A1:{last_col}{num_rows}"
         clear_rows = max(num_rows, SHEET_CLEAR_MAX_ROWS)
         clear_range = f"A1:{last_col}{clear_rows}"
 
         worksheet.batch_clear([clear_range])
         logging.info(f"Очищен диапазон {clear_range} (формулы справа сохранены)")
 
-        worksheet.update(values, "A1", value_input_option="USER_ENTERED")
+        # RAW — значения как есть, без интерпретации (числа сохраняют запятую в отображении по локали)
+        worksheet.update(values, "A1", value_input_option="RAW")
         logging.info(f"Залито в Google Sheets: {len(df)} строк")
     except ImportError as e:
         logging.error(f"Установите gspread и google-auth: pip install gspread google-auth. {e}")
