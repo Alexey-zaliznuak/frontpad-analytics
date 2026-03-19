@@ -3,7 +3,8 @@ import logging
 import os
 import platform
 import re
-from datetime import datetime, date
+import shutil
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -39,9 +40,27 @@ COLUMN_ORDER = [
 ]
 
 
+def cleanup_old_logs(logs_base: Path, max_age_days: int = 90) -> None:
+    """Удаляет папки с логами старше max_age_days (по умолчанию 3 месяца)."""
+    if not logs_base.exists():
+        return
+    cutoff = datetime.now() - timedelta(days=max_age_days)
+    for item in logs_base.iterdir():
+        if not item.is_dir():
+            continue
+        try:
+            folder_date = datetime.strptime(item.name, "%Y-%m-%d")
+            if folder_date < cutoff:
+                shutil.rmtree(item)
+                logging.info(f"Удалена старая папка логов: {item}")
+        except ValueError:
+            pass  # не YYYY-MM-DD, пропускаем
+
+
 def setup_logging() -> Path:
     """Настройка логирования в logs/YYYY-MM-DD/log.log"""
-    log_dir = Path("logs") / datetime.now().strftime("%Y-%m-%d")
+    logs_base = Path("logs")
+    log_dir = logs_base / datetime.now().strftime("%Y-%m-%d")
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "log.log"
 
@@ -66,6 +85,7 @@ def setup_logging() -> Path:
     ch.setFormatter(formatter)
     logger.addHandler(ch)
 
+    cleanup_old_logs(logs_base)
     return log_dir
 
 
