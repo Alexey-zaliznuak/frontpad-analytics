@@ -3,7 +3,7 @@ import logging
 import os
 import platform
 import re
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 
 import pandas as pd
@@ -229,11 +229,20 @@ def upload_to_google_sheet(df: pd.DataFrame) -> None:
         def to_sheet_value(v):
             if pd.isna(v) or v == "":
                 return ""
+            # Даты — всегда в формате YYYY.MM.DD (явно, до str())
+            import numpy as np
+            if isinstance(v, (pd.Timestamp, datetime, date)) or (hasattr(np, "datetime64") and isinstance(v, np.datetime64)):
+                try:
+                    dt = pd.Timestamp(v) if not isinstance(v, pd.Timestamp) else v
+                    if pd.isna(dt):
+                        return ""
+                    return dt.strftime("%Y.%m.%d")
+                except Exception:
+                    pass
             # Числа — передаём как int/float, не строки (иначе в Sheets показывается '1234)
             try:
                 if isinstance(v, (int, float)) and not isinstance(v, bool):
                     return float(v) if isinstance(v, float) else int(v)
-                import numpy as np
                 if isinstance(v, (np.integer, np.floating)):
                     return float(v) if isinstance(v, np.floating) else int(v)
             except (ValueError, TypeError, ImportError):
@@ -254,10 +263,20 @@ def upload_to_google_sheet(df: pd.DataFrame) -> None:
                     return int(s_clean)
                 except ValueError:
                     pass
-            # Числа с точкой "1234.5" — в float
+            # Числа с точкой "1234.5" — в float (не даты: у даты 3 части 01.01.2001)
             if re.match(r"^-?\d+\.\d+$", s_clean):
                 try:
                     return float(s_clean)
+                except ValueError:
+                    pass
+            # Даты YYYY-MM-DD → YYYY.MM.DD (точки вместо дефисов)
+            if re.match(r"^\d{4}-\d{2}-\d{2}", s_clean):
+                return s_clean[:10].replace("-", ".")
+            # Даты DD.MM.YYYY → YYYY.MM.DD (если пришли строками из источника)
+            if re.match(r"^\d{1,2}\.\d{1,2}\.\d{4}$", s_clean):
+                try:
+                    dt = datetime.strptime(s_clean, "%d.%m.%Y")
+                    return dt.strftime("%Y.%m.%d")
                 except ValueError:
                     pass
             return s
@@ -283,8 +302,8 @@ def upload_to_google_sheet(df: pd.DataFrame) -> None:
         worksheet.batch_clear([clear_range])
         logging.info(f"Очищен диапазон {clear_range} (формулы справа сохранены)")
 
-        # RAW — значения как есть, без интерпретации (числа сохраняют запятую в отображении по локали)
-        worksheet.update(values, "A1", value_input_option="RAW")
+        # USER_ENTERED — даты распознаются как даты, формулы работают; формат отображения — в Sheets (Формат → Число)
+        worksheet.update(values, "A1", value_input_option="USER_ENTERED")
         logging.info(f"Залито в Google Sheets: {len(df)} строк")
     except ImportError as e:
         logging.error(f"Установите gspread и google-auth: pip install gspread google-auth. {e}")
@@ -302,23 +321,29 @@ async def run_profile(page, profile: dict, screenshots_dir: Path | None, downloa
 
     try:
         await page.goto("https://app.frontpad.ru/login/")
+        await page.wait_for_load_state("networkidle")
         await save_screenshot(page, f"01_page_loaded_{branch_name}", screenshots_dir)
 
         await page.fill("#login", login)
         await page.fill('input[name="password"]', password)
 
+        # Проверка актуальности капчи: используем кэш, если получасовой период не истёк
         captcha_input = page.locator('input[name="login_code"]')
         if await captcha_input.count() > 0 and await captcha_input.is_visible():
             logging.info("Обнаружено поле капчи...")
             captcha_img_el = page.locator('img#login_code')
+            await captcha_img_el.wait_for(state="visible", timeout=5000)
             captcha_url = "https://app.frontpad.ru/login/blocks/code/codegen.php?a9="
             if await captcha_img_el.count() > 0:
                 src = await captcha_img_el.get_attribute("src")
                 if src:
                     captcha_url = src if src.startswith("http") else f"https://app.frontpad.ru/login/{src}"
+            # Кэш: пересчёт только если получасовой период истёк
             captcha = await asyncio.to_thread(solve_captcha_cached, captcha_url, 3)
             if captcha:
                 await captcha_input.fill(captcha)
+            else:
+                logging.warning("Не удалось решить капчу, продолжаем попытку входа...")
 
         await page.locator('span.btn:has-text("Войти")').click()
         await page.wait_for_url(lambda url: "/login" not in url, timeout=15000)
@@ -397,20 +422,22 @@ async def main():
         # Windows: headed по умолчанию, остальные ОС: headless
         _default = "false" if platform.system() == "Windows" else "true"
         headless = os.getenv("HEADLESS", _default).lower() == "true"
-        browser = await p.chromium.launch(headless=headless)
-        page = await browser.new_page()
 
-        try:
-            for profile in PROFILES:
+        for i, profile in enumerate(PROFILES):
+            # Для каждого филиала — новый браузер
+            browser = await p.chromium.launch(headless=headless)
+            try:
+                page = await browser.new_page()
                 df = await run_profile(page, profile, screenshots_dir, downloads_dir)
                 if df is not None:
                     all_dfs.append(df)
-                # Выход из аккаунта перед следующим профилем (переход на логин)
-                if profile != PROFILES[-1]:
-                    await page.goto("https://app.frontpad.ru/login/")
-                    await page.wait_for_timeout(1000)
-        finally:
-            await browser.close()
+            finally:
+                await browser.close()
+
+            # Пауза 1 минута между филиалами (кроме последнего)
+            if i < len(PROFILES) - 1:
+                logging.info("Пауза 1 минута перед следующим филиалом...")
+                await asyncio.sleep(20)
 
     if all_dfs:
         combined = pd.concat(all_dfs, ignore_index=True)

@@ -103,6 +103,7 @@ def solve_captcha_cached(image_url, target_count=3) -> str | None:
     """
     Распознавание CAPTCHA с кэшированием.
     Капча одинакова в рамках 30-минутных периодов (00:00-00:29, 00:30-00:59, ...).
+    Пересчёт только если получасовой период истёк.
     """
     cached = _get_cached_captcha()
     if cached is not None:
