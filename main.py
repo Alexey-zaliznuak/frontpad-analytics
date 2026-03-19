@@ -299,6 +299,9 @@ def upload_to_google_sheet(df: pd.DataFrame) -> None:
                     return dt.strftime("%Y.%m.%d")
                 except ValueError:
                     pass
+            # Телефоны с добавочным или начинающиеся с + — префикс ' чтобы избежать #ERROR в Sheets
+            if "доб." in s.lower() or (s.strip().startswith("+") and re.search(r"\d", s)):
+                return "'" + s
             return s
 
         headers = df.columns.tolist()
