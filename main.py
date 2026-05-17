@@ -11,7 +11,14 @@ import pandas as pd
 from playwright.async_api import async_playwright
 
 from captcha_solve import solve_captcha_cached
-from settings import PROFILES, SPREADSHEET_ID, SERVICE_ACCOUNT_FILE, REPORT_SHEET_NAME, SHEET_CLEAR_MAX_ROWS
+from settings import (
+    PROFILES,
+    REPORT_SHEET_NAME,
+    SERVICE_ACCOUNT_FILE,
+    SHEET_CLEAR_MAX_ROWS,
+    SHEET_TRAILING_EMPTY_ROWS,
+    SPREADSHEET_ID,
+)
 
 DEBUG = True
 
@@ -226,6 +233,7 @@ def _col_letter(n: int) -> str:
 def upload_to_google_sheet(df: pd.DataFrame) -> None:
     """
     Очищает только столбцы с данными (слева) и заливает датафрейм.
+    В конец добавляется SHEET_TRAILING_EMPTY_ROWS пустых строк.
     Столбцы справа (формулы) не трогаются.
     """
     if not SPREADSHEET_ID:
@@ -305,8 +313,11 @@ def upload_to_google_sheet(df: pd.DataFrame) -> None:
             return s
 
         headers = df.columns.tolist()
+        num_cols = len(headers)
         rows = [[to_sheet_value(v) for v in row] for row in df.values.tolist()]
         values = [headers] + rows
+        if num_cols and SHEET_TRAILING_EMPTY_ROWS > 0:
+            values.extend([[""] * num_cols for _ in range(SHEET_TRAILING_EMPTY_ROWS)])
 
         # Логируем первые 70 значений в каждом столбце
         for col_idx, col_name in enumerate(headers):
@@ -316,7 +327,6 @@ def upload_to_google_sheet(df: pd.DataFrame) -> None:
         if not values:
             return
 
-        num_cols = len(headers)
         num_rows = len(values)
         last_col = _col_letter(num_cols)
         clear_rows = max(num_rows, SHEET_CLEAR_MAX_ROWS)
@@ -327,7 +337,8 @@ def upload_to_google_sheet(df: pd.DataFrame) -> None:
 
         # USER_ENTERED — даты распознаются как даты, формулы работают; формат отображения — в Sheets (Формат → Число)
         worksheet.update(values, "A1", value_input_option="USER_ENTERED")
-        logging.info(f"Залито в Google Sheets: {len(df)} строк")
+        padded = max(0, len(values) - 1 - len(df))
+        logging.info(f"Залито в Google Sheets: {len(df)} строк данных + {padded} пустых в конце")
     except ImportError as e:
         logging.error(f"Установите gspread и google-auth: pip install gspread google-auth. {e}")
     except Exception as e:
